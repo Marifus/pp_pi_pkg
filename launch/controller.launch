@@ -1,0 +1,5 @@
+<launch>
+    <node name="controller_node" pkg="pp_pi_pkg" type="controller_node" output="screen">
+        <rosparam command="load" file="$(find pp_pi_pkg)/config/default.yaml" />
+    </node>
+</launch>
