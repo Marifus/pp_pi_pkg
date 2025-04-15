@@ -43,7 +43,7 @@ namespace pp_pi
         void ControlOutput();
         void LocalTransform(geometry_msgs::Pose& current_point_pose, geometry_msgs::Pose& target_point_pose, double transformed_vector[3]);
         int ClosestWaypointIndex(geometry_msgs::Pose& current_point_pose, nav_msgs::Path& path);
-        geometry_msgs::Pose ChooseLookaheadPoint(geometry_msgs::Pose& current_point_pose, nav_msgs::Path& t_path, double t_lookahead_distance);
+        geometry_msgs::Pose ChooseLookaheadPoint(geometry_msgs::Pose& current_point_pose, nav_msgs::Path& t_path, double t_lookahead_distance, int closest_index);
         double PPPIAlgorithm(geometry_msgs::Pose& current_point_pose, nav_msgs::Path& t_path, double t_lookahead_distance, double t_axle_length, double t_Kpp, double t_Kp, double t_Ki);
         double CalculateLookaheadError(double heading_error, double lateral_error, double hipo);
         double LowPassFilter(double steering, std::vector<double> &steering_vec, int f_length, double w_current);
