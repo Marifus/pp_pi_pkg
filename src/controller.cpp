@@ -62,7 +62,7 @@ namespace pp_pi
         ROS_INFO("Simdiki Konum: [%f, %f]", vehicle_odom.pose.pose.position.x, vehicle_odom.pose.pose.position.y);
         ROS_INFO("Simdiki Yaw: [%f]", current_heading);
 
-        ControlOutput();
+        if (path.poses.size() != 0) ControlOutput();
     }
 
     void PP_PI::ControlOutput()
@@ -104,7 +104,7 @@ namespace pp_pi
         double lateral_error = std::sqrt(std::pow(transformed_closest_pose[0], 2) + std::pow(transformed_closest_pose[1], 2));
         if (sin(-heading_error) < 0) lateral_error = -lateral_error;
 
-        double lookahead_error = CalculateLookaheadError(heading_error, lateral_error, (axle_length/2 + t_lookahead_distance));
+        double lookahead_error = CalculateLookaheadError(heading_error, lateral_error, (axle_length + t_lookahead_distance));
         i_error += lateral_error;
 
         double pppi_steering = t_Kpp * pp_steering + t_Kp * lookahead_error + t_Ki * i_error;
