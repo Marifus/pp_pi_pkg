@@ -1,7 +1,7 @@
-lookahead_distance: 3
-axle_length: 1.5
-Kpp: 0.90
-Kp: 0.09
-Ki: 0.01
+lookahead_distance: 1.5
+axle_length: 1.25
+Kpp: 0.85
+Kp: 0.13
+Ki: 0.02
 weight_current: 0.9
 filter_length: 10

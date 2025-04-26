@@ -12,8 +12,8 @@ namespace pp_pi
             ros::requestShutdown();
         }
 
-        path_sub = nh_.subscribe("/odom", 10, &PP_PI::PathCallback, this);
-        odom_sub = nh_.subscribe("/odom_sim", 10, &PP_PI::OdomCallback, this);
+        path_sub = nh_.subscribe("/shortest_path", 10, &PP_PI::PathCallback, this);
+        odom_sub = nh_.subscribe("/odom", 10, &PP_PI::OdomCallback, this);
         ctrl_pub = nh_.advertise<autoware_msgs::VehicleCmd>("/vehicle_cmd", 10);
         path_pub = nh_.advertise<nav_msgs::Path>("/path", 10);
 
@@ -71,8 +71,8 @@ namespace pp_pi
 
         double steering_angle_degree = steering_angle * (180 / M_PI);
 
-        if (steering_angle_degree > 50) steering_angle = 50 * (M_PI / 180);
-        else if (steering_angle_degree < -50) steering_angle = -50 * (M_PI / 180);
+        if (steering_angle_degree > 100) steering_angle = 100 * (M_PI / 180);
+        else if (steering_angle_degree < -100) steering_angle = -100 * (M_PI / 180);
 
         ROS_INFO("Donus Acisi: [%f]", steering_angle);
 
@@ -97,12 +97,12 @@ namespace pp_pi
         LocalTransform(current_point_pose, closest_pose, transformed_closest_pose);
 
         double current_yaw = GetYaw(current_point_pose.orientation);
-        double path_yaw = GetYaw(closest_pose.orientation);
+        double path_yaw = closest_point_index+1 < t_path.poses.size() ? std::atan2(t_path.poses[closest_point_index+1].pose.position.y - t_path.poses[closest_point_index].pose.position.y, t_path.poses[closest_point_index+1].pose.position.x - t_path.poses[closest_point_index].pose.position.x) : atan2(t_path.poses[closest_point_index].pose.position.y - t_path.poses[closest_point_index-1].pose.position.y, t_path.poses[closest_point_index].pose.position.x - t_path.poses[closest_point_index-1].pose.position.x);
 
         double heading_error = current_yaw - path_yaw;
 
         double lateral_error = std::sqrt(std::pow(transformed_closest_pose[0], 2) + std::pow(transformed_closest_pose[1], 2));
-        if (sin(-heading_error) < 0) lateral_error = -lateral_error;
+        if (transformed_closest_pose[1] < 0) lateral_error = -lateral_error;
 
         double lookahead_error = CalculateLookaheadError(heading_error, lateral_error, (axle_length + t_lookahead_distance));
         i_error += lateral_error;
