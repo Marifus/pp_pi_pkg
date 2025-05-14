@@ -12,12 +12,17 @@ namespace pp_pi
             ros::requestShutdown();
         }
 
+        i_error = 0;
+        marker_id = 0;
+
         path_sub = nh_.subscribe("/shortest_path", 10, &PP_PI::PathCallback, this);
         odom_sub = nh_.subscribe("/odom", 10, &PP_PI::OdomCallback, this);
         ctrl_pub = nh_.advertise<autoware_msgs::VehicleCmd>("/vehicle_cmd", 10);
         path_pub = nh_.advertise<nav_msgs::Path>("/path", 10);
+        mark_pub = nh_.advertise<visualization_msgs::Marker>("/waypoint", 10);
 
     }
+
 
     bool PP_PI::ReadParameters()
     {
@@ -28,14 +33,20 @@ namespace pp_pi
         if (!nh_.getParam("Ki", Ki)) return false;
         if (!nh_.getParam("weight_current", weight_current)) return false;
         if (!nh_.getParam("filter_length", filter_length)) return false;
+        if (!nh_.getParam("velocity", velocity)) return false;
+        if (!nh_.getParam("input_log", input_log)) return false;
+        if (!nh_.getParam("output_log", output_log)) return false;
 
-        ROS_INFO("Lookahead Distance: %f", lookahead_distance);
+        ROS_INFO("Lookahead Distance: [%f]", lookahead_distance);
         ROS_INFO("PP_PI Katsayilari: [%f, %f, %f]", Kpp, Kp, Ki);
         ROS_INFO("Filtre Katsayisi: [%f]", weight_current);
         ROS_INFO("Filtre Uzunlugu: [%d]", filter_length);
+        ROS_INFO("Arac Hizi: [%f]", velocity);
+        ROS_INFO("Girdi/Cikti Gosterme: [%d, %d]", input_log, output_log);
 
         return true;
     }
+
 
     double PP_PI::GetYaw(geometry_msgs::Quaternion& q)
     {
@@ -43,6 +54,7 @@ namespace pp_pi
         return yaw;
     }
 
+/* 
     void PP_PI::PathCallback(const nav_msgs::Odometry::ConstPtr& msg)
     {
         geometry_msgs::PoseStamped pose_stamped;
@@ -53,17 +65,52 @@ namespace pp_pi
         path.header = msg->header;
         path_pub.publish(path);
     }
+*/
+
+    void PP_PI::PathCallback(const nav_msgs::Path::ConstPtr& msg)
+    {
+        path = *msg;
+
+        for (int i = 0; i < path.poses.size(); ++i)
+        {
+            if (i+1<path.poses.size())
+            {
+                while (path.poses[i].pose.position.x == path.poses[i+1].pose.position.x && path.poses[i].pose.position.y == path.poses[i+1].pose.position.y)
+                {
+                    path.poses.erase(path.poses.begin()+i);
+                    if (i+1>=path.poses.size()) break;
+                }
+            }
+        }
+    }
+
 
     void PP_PI::OdomCallback(const nav_msgs::Odometry::ConstPtr& msg)
     {
         vehicle_odom = *msg;
-
         double current_heading = GetYaw(vehicle_odom.pose.pose.orientation);
-        ROS_INFO("Simdiki Konum: [%f, %f]", vehicle_odom.pose.pose.position.x, vehicle_odom.pose.pose.position.y);
-        ROS_INFO("Simdiki Yaw: [%f]", current_heading);
+
+        vehicle_odom.pose.pose.position.x += cos(current_heading)*axle_length*0.5;
+        vehicle_odom.pose.pose.position.y += sin(current_heading)*axle_length*0.5;
+
+        if(input_log)
+        {
+            ROS_INFO("Simdiki Konum: [%f, %f]", vehicle_odom.pose.pose.position.x, vehicle_odom.pose.pose.position.y);
+            ROS_INFO("Simdiki Yaw: [%f]", current_heading);
+        }
 
         if (path.poses.size() != 0) ControlOutput();
+
+        else
+        {
+            autoware_msgs::VehicleCmd ctrl_msg;
+            ctrl_msg.header.stamp = ros::Time::now();
+            ctrl_msg.twist_cmd.twist.linear.x = 0;
+            ctrl_msg.twist_cmd.twist.angular.z = 0;
+            ctrl_pub.publish(ctrl_msg);
+        }
     }
+
 
     void PP_PI::ControlOutput()
     {
@@ -74,7 +121,10 @@ namespace pp_pi
         if (steering_angle_degree > 100) steering_angle = 100 * (M_PI / 180);
         else if (steering_angle_degree < -100) steering_angle = -100 * (M_PI / 180);
 
-        ROS_INFO("Donus Acisi: [%f]", steering_angle);
+        if(output_log)
+        {
+            ROS_INFO("Donus Acisi: [%f]", steering_angle);
+        }
 
         autoware_msgs::VehicleCmd control_msg;
         control_msg.twist_cmd.twist.angular.z = steering_angle;
@@ -82,34 +132,59 @@ namespace pp_pi
         ctrl_pub.publish(control_msg);
     }
 
+
     double PP_PI::PPPIAlgorithm(geometry_msgs::Pose& current_point_pose, nav_msgs::Path& t_path, double t_lookahead_distance, double t_axle_length, double t_Kpp, double t_Kp, double t_Ki)
     {
-        int closest_point_index = ClosestWaypointIndex(current_point_pose, t_path);
+/*         int closest_point_index = ClosestWaypointIndex(current_point_pose, t_path); */
+        int closest_point_index = 0;
         geometry_msgs::Pose pp_target_pose = ChooseLookaheadPoint(current_point_pose, t_path, t_lookahead_distance, closest_point_index);
 
-        double transformed_pp_target_vec[3] = {0, 0, 0};
-        LocalTransform(current_point_pose, pp_target_pose, transformed_pp_target_vec);
+        geometry_msgs::Pose transformed_pp_target_pose = LocalTransform(current_point_pose, pp_target_pose);
 
-        double pp_steering = PurePursuitAlgorithm(transformed_pp_target_vec[0], transformed_pp_target_vec[1], t_axle_length);
+        double pp_steering = PurePursuitAlgorithm(transformed_pp_target_pose.position.x, transformed_pp_target_pose.position.y, t_axle_length);
 
         geometry_msgs::Pose closest_pose = t_path.poses[closest_point_index].pose;
-        double transformed_closest_pose[3] = {0, 0, 0};
-        LocalTransform(current_point_pose, closest_pose, transformed_closest_pose);
+
+        geometry_msgs::Pose transformed_closest_pose = LocalTransform(current_point_pose, closest_pose);
 
         double current_yaw = GetYaw(current_point_pose.orientation);
-        double path_yaw = closest_point_index+1 < t_path.poses.size() ? std::atan2(t_path.poses[closest_point_index+1].pose.position.y - t_path.poses[closest_point_index].pose.position.y, t_path.poses[closest_point_index+1].pose.position.x - t_path.poses[closest_point_index].pose.position.x) : atan2(t_path.poses[closest_point_index].pose.position.y - t_path.poses[closest_point_index-1].pose.position.y, t_path.poses[closest_point_index].pose.position.x - t_path.poses[closest_point_index-1].pose.position.x);
+        double path_yaw = CalculatePathYaw(t_path, closest_point_index);
 
         double heading_error = current_yaw - path_yaw;
 
-        double lateral_error = std::sqrt(std::pow(transformed_closest_pose[0], 2) + std::pow(transformed_closest_pose[1], 2));
-        if (transformed_closest_pose[1] < 0) lateral_error = -lateral_error;
+        double lateral_error = CalculateLateralError(current_point_pose, t_path, closest_point_index);
 
-        double lookahead_error = CalculateLookaheadError(heading_error, lateral_error, (axle_length + t_lookahead_distance));
+        double lookahead_error = CalculateLookaheadError(heading_error, lateral_error, (axle_length/2 + t_lookahead_distance));
         i_error += lateral_error;
 
         double pppi_steering = t_Kpp * pp_steering + t_Kp * lookahead_error + t_Ki * i_error;
         return pppi_steering;
     }
+
+
+    double PP_PI::CalculateLateralError(const geometry_msgs::Pose& current_point_pose, const nav_msgs::Path& t_path, int closest_idx)
+    {
+        double path_yaw = CalculatePathYaw(t_path, closest_idx);
+
+        geometry_msgs::Pose closest_point_pose = t_path.poses[closest_idx].pose;
+
+        tf2::Transform transform, closest_point_tf;
+        tf2::fromMsg(closest_point_pose, closest_point_tf);
+
+        tf2::Vector3 translation(current_point_pose.position.x, current_point_pose.position.y, 0);
+        tf2::Quaternion rotation;
+        rotation.setRPY(0.0, 0.0, path_yaw);
+
+        transform.setOrigin(translation);
+        transform.setRotation(rotation);
+
+        tf2::Transform transformed_tf = transform.inverse() * closest_point_tf;
+
+        double lateral_error = transformed_tf.getOrigin().y();
+
+        return lateral_error;
+    }
+
 
     double PP_PI::CalculateLookaheadError(double heading_error, double lateral_error, double hipo)
     {
@@ -117,34 +192,6 @@ namespace pp_pi
         return lookahead_error;
     }
 
-    void PP_PI::LocalTransform(geometry_msgs::Pose& current_point_pose, geometry_msgs::Pose& target_point_pose, double transformed_vector[3])
-    {
-        
-        double tx = -1 * current_point_pose.position.x;
-        double ty = -1 * current_point_pose.position.y;
-
-        double current_heading_ = GetYaw(current_point_pose.orientation);
-
-        double target_vec[3] = {target_point_pose.position.x, target_point_pose.position.y, 1};
-
-        double TransformationMatrix[3][3] = {
-            {cos(-current_heading_), -sin(-current_heading_), cos(-current_heading_) * tx - sin(-current_heading_) * ty},
-            {sin(-current_heading_), cos(-current_heading_), sin(-current_heading_) * tx + cos(-current_heading_) * ty},
-            {0.0, 0.0, 1.0}
-        };
-
-        for (int i=0; i<3; i++) {
-        
-            transformed_vector[i] = 0;
-
-            for (int j=0; j<3; j++) {
-
-                transformed_vector[i] += TransformationMatrix[i][j] * target_vec[j];
-
-           }
-        }
-
-    }
 
     int PP_PI::ClosestWaypointIndex(geometry_msgs::Pose& current_point_pose, nav_msgs::Path& path)
     {
@@ -176,6 +223,7 @@ namespace pp_pi
         return closest_point_index;
     }
 
+
     geometry_msgs::Pose PP_PI::ChooseLookaheadPoint(geometry_msgs::Pose& current_point_pose, nav_msgs::Path& t_path, double t_lookahead_distance, int closest_index) 
     {
         int chosen_point_index = closest_index;
@@ -191,11 +239,27 @@ namespace pp_pi
             distance2 = std::pow((waypoint.pose.position.x - current_point_pose.position.x), 2) + std::pow((waypoint.pose.position.y - current_point_pose.position.y), 2);
         }
 
-        chosen_point_index--;
-
         geometry_msgs::Pose& chosen_point = path.poses[chosen_point_index].pose;
+
+        visualization_msgs::Marker marker;
+        marker.header = t_path.header;
+        marker.id = marker_id;
+        marker.action = visualization_msgs::Marker::ADD;
+        marker.pose.position = chosen_point.position;
+        marker.type = visualization_msgs::Marker::SPHERE;
+        marker.scale.x = 0.15;
+        marker.scale.y = 0.15;
+        marker.scale.z = 0.15;
+        marker.color.a = 1.0;
+        marker.color.r = 0.0;
+        marker.color.g = 0.0;
+        marker.color.b = 1.0;
+        
+        mark_pub.publish(marker);
+
         return chosen_point;
     }
+
 
     double PP_PI::PurePursuitAlgorithm(double target_x, double target_y, double length)
     {
@@ -204,6 +268,7 @@ namespace pp_pi
         double steering = atan2((2*target_y*length), (distance2));
         return steering;
     }
+
 
     double PP_PI::LowPassFilter(double steering, std::vector<double> &steering_vec, int f_length, double w_current)
     {
@@ -220,6 +285,46 @@ namespace pp_pi
 
         double w_prev = (1 - w_current) / (steering_vec.size()-1);
         return ((sum * w_prev) + (steering * w_current));
+    }
+
+
+    double PP_PI::CalculatePathYaw(const nav_msgs::Path& t_path, int closest_idx)
+    {
+        int second_idx = closest_idx+1;
+        double path_yaw;
+
+        while (t_path.poses[second_idx].pose.position.y == t_path.poses[closest_idx].pose.position.y && t_path.poses[second_idx].pose.position.x == t_path.poses[closest_idx].pose.position.x)
+        {
+            if (second_idx<closest_idx) second_idx--;
+
+            else {
+                second_idx++;
+                if (!(second_idx<t_path.poses.size())) second_idx = closest_idx-1;
+            }
+        }
+        
+        if (second_idx<closest_idx) path_yaw = std::atan2(t_path.poses[closest_idx].pose.position.y - t_path.poses[second_idx].pose.position.y, t_path.poses[closest_idx].pose.position.x - t_path.poses[second_idx].pose.position.x);
+        else path_yaw = std::atan2(t_path.poses[second_idx].pose.position.y - t_path.poses[closest_idx].pose.position.y, t_path.poses[second_idx].pose.position.x - t_path.poses[closest_idx].pose.position.x);
+
+        return path_yaw;
+    }
+
+
+    geometry_msgs::Pose PP_PI::LocalTransform(const geometry_msgs::Pose& origin_pose, const geometry_msgs::Pose& target_point_pose)
+    {   
+        tf2::Transform origin_tf, target_point_tf, g2l_transform, transformed_point_tf;
+
+        tf2::fromMsg(origin_pose, origin_tf);
+        g2l_transform = origin_tf.inverse();
+
+        tf2::fromMsg(target_point_pose, target_point_tf);
+
+        transformed_point_tf = g2l_transform * target_point_tf;
+        
+        geometry_msgs::Pose transformed_pose;
+        tf2::toMsg(transformed_point_tf, transformed_pose);
+
+        return transformed_pose;
     }
 
 }
